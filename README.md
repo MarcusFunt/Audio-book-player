@@ -14,3 +14,10 @@ A fully client-side audiobook player built for GitHub Pages. Load local MP3 file
 3. Choose an MP3 file from your device to begin listening.
 
 > **Note**: Because this is hosted on GitHub Pages, the app cannot access files unless you select them each session. The app remembers the last file name and position so you can quickly resume by choosing the same file again.
+
+## Documentation
+- [Development guide](docs/DEVELOPMENT.md)
+- [Hosting on GitHub Pages](docs/HOSTING.md)
+
+## Deployment
+This repo includes a GitHub Actions workflow that deploys the site to GitHub Pages whenever changes land on `main`. See the hosting guide for setup details.
