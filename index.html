@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AudioBook Player</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <main class="app">
+      <header class="app__header">
+        <div>
+          <p class="app__eyebrow">Offline audiobook companion</p>
+          <h1>AudioBook Player</h1>
+          <p class="app__subtitle">
+            Load local MP3 files, remember your place, and drift off with a sleep
+            timer.
+          </p>
+        </div>
+        <div class="profile">
+          <span id="active-user" class="profile__name">Not signed in</span>
+          <button id="switch-user" class="ghost-button" type="button">
+            Switch user
+          </button>
+        </div>
+      </header>
+
+      <section class="card">
+        <div class="card__header">
+          <h2>Your Library</h2>
+          <p>Choose a local MP3 to start listening.</p>
+        </div>
+        <div class="library">
+          <label class="file-input">
+            <input id="file-input" type="file" accept="audio/mpeg" />
+            <span>Choose MP3</span>
+          </label>
+          <div class="library__details">
+            <p id="file-name" class="muted">No file selected</p>
+            <p id="file-hint" class="muted"></p>
+          </div>
+        </div>
+        <div id="resume-banner" class="resume-banner hidden">
+          <div>
+            <strong>Resume?</strong>
+            <p id="resume-text" class="muted"></p>
+          </div>
+          <button id="resume-button" class="primary-button" type="button">
+            Resume
+          </button>
+        </div>
+      </section>
+
+      <section class="card player">
+        <div class="player__art">
+          <div class="player__glyph">📖</div>
+          <div>
+            <h2 id="track-title">No audio loaded</h2>
+            <p id="track-meta" class="muted">
+              Sign in and select a file to begin.
+            </p>
+          </div>
+        </div>
+        <div class="player__progress">
+          <input
+            id="progress"
+            type="range"
+            min="0"
+            max="100"
+            step="0.1"
+            value="0"
+          />
+          <div class="player__timestamps">
+            <span id="current-time">0:00</span>
+            <span id="duration">0:00</span>
+          </div>
+        </div>
+        <div class="player__controls">
+          <button id="back-15" class="icon-button" type="button">
+            ⏪ 15s
+          </button>
+          <button id="play-toggle" class="primary-button" type="button">
+            ▶ Play
+          </button>
+          <button id="forward-30" class="icon-button" type="button">
+            30s ⏩
+          </button>
+        </div>
+        <div class="player__settings">
+          <label>
+            Speed
+            <select id="playback-rate">
+              <option value="0.75">0.75x</option>
+              <option value="1" selected>1x</option>
+              <option value="1.25">1.25x</option>
+              <option value="1.5">1.5x</option>
+              <option value="2">2x</option>
+            </select>
+          </label>
+          <label>
+            Volume
+            <input id="volume" type="range" min="0" max="1" step="0.05" value="1" />
+          </label>
+          <label>
+            Sleep timer
+            <select id="sleep-timer">
+              <option value="off" selected>Off</option>
+              <option value="900">15 minutes</option>
+              <option value="1800">30 minutes</option>
+              <option value="2700">45 minutes</option>
+              <option value="3600">60 minutes</option>
+            </select>
+          </label>
+        </div>
+        <div class="player__sleep">
+          <p id="sleep-status" class="muted">Sleep timer off.</p>
+          <button id="cancel-timer" class="ghost-button" type="button" disabled>
+            Cancel timer
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <div id="login-modal" class="modal">
+      <div class="modal__content">
+        <h2>Welcome back</h2>
+        <p class="muted">
+          Create a profile to save your position on this device. Add an optional
+          PIN for extra privacy.
+        </p>
+        <form id="login-form">
+          <label>
+            Username
+            <input id="username" type="text" autocomplete="username" required />
+          </label>
+          <label>
+            PIN (optional)
+            <input id="pin" type="password" autocomplete="current-password" />
+          </label>
+          <button class="primary-button" type="submit">Continue</button>
+        </form>
+        <p id="login-message" class="muted"></p>
+      </div>
+    </div>
+
+    <audio id="audio"></audio>
+    <script src="app.js"></script>
+  </body>
+</html>
