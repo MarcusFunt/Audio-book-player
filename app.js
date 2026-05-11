@@ -620,6 +620,17 @@ const loadAudioFile = async (file, handle = null) => {
   audio.src = currentObjectUrl;
   audio.load();
 
+  // Persist the file handle before updating the DOM so that the handle is
+  // guaranteed to be saved by the time any polled assertion (e.g. track-title)
+  // resolves and the caller can safely navigate away.
+  if (handle) {
+    try {
+      await saveFileHandle(currentFileId, handle);
+    } catch {
+      setFileAccessStatus("File loaded, but quick reopen could not be saved.");
+    }
+  }
+
   fileName.textContent = file.name;
   trackTitle.textContent = file.name;
   trackMeta.textContent = `Loaded locally - ${formatFileSize(file.size)}`;
@@ -629,14 +640,6 @@ const loadAudioFile = async (file, handle = null) => {
     lastFileId: currentFileId,
     lastFileName: currentFileName,
   });
-
-  if (handle) {
-    try {
-      await saveFileHandle(currentFileId, handle);
-    } catch {
-      setFileAccessStatus("File loaded, but quick reopen could not be saved.");
-    }
-  }
 
   if (getSafeDuration()) {
     prepareResumePrompt();
