@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AudioBook Player</title>
+    <meta name="theme-color" content="#3b5af7" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="icons/icon.svg" />
+    <link rel="apple-touch-icon" href="icons/icon.svg" />
     <link rel="stylesheet" href="styles.css" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -16,10 +20,10 @@
     <main class="app">
       <header class="app__header">
         <div>
-          <p class="app__eyebrow">Offline audiobook companion</p>
+          <p class="app__eyebrow">Audiobook companion</p>
           <h1>AudioBook Player</h1>
           <p class="app__subtitle">
-            Load local MP3 files, remember your place, and drift off with a sleep
+            Load audio files, remember your place, and drift off with a sleep
             timer.
           </p>
         </div>
@@ -34,16 +38,33 @@
       <section class="card">
         <div class="card__header">
           <h2>Your Library</h2>
-          <p>Choose a local MP3 to start listening.</p>
+          <p>Choose an audio file to start listening.</p>
         </div>
         <div class="library">
-          <label class="file-input">
-            <input id="file-input" type="file" accept="audio/mpeg" />
-            <span>Choose MP3</span>
-          </label>
+          <div class="library__actions">
+            <button id="file-picker-button" class="primary-button" type="button">
+              Choose audio
+            </button>
+            <button
+              id="reopen-file"
+              class="ghost-button hidden"
+              type="button"
+              disabled
+            >
+              Reopen last file
+            </button>
+          </div>
+          <label class="visually-hidden" for="file-input">Choose audio file</label>
+          <input
+            id="file-input"
+            class="visually-hidden"
+            type="file"
+            accept="audio/*,.m4b"
+          />
           <div class="library__details">
             <p id="file-name" class="muted">No file selected</p>
             <p id="file-hint" class="muted"></p>
+            <p id="file-access-status" class="muted" aria-live="polite"></p>
           </div>
         </div>
         <div id="resume-banner" class="resume-banner hidden">
@@ -51,7 +72,7 @@
             <strong>Resume?</strong>
             <p id="resume-text" class="muted"></p>
           </div>
-          <button id="resume-button" class="primary-button" type="button">
+          <button id="resume-button" class="primary-button" type="button" disabled>
             Resume
           </button>
         </div>
@@ -127,21 +148,22 @@
       </section>
     </main>
 
-    <div id="login-modal" class="modal">
+    <div
+      id="login-modal"
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="login-title"
+    >
       <div class="modal__content">
-        <h2>Welcome back</h2>
+        <h2 id="login-title">Welcome back</h2>
         <p class="muted">
-          Create a profile to save your position on this device. Add an optional
-          PIN for extra privacy.
+          Create a profile to save your listening progress on this device.
         </p>
         <form id="login-form">
           <label>
             Username
             <input id="username" type="text" autocomplete="username" required />
-          </label>
-          <label>
-            PIN (optional)
-            <input id="pin" type="password" autocomplete="current-password" />
           </label>
           <button class="primary-button" type="submit">Continue</button>
         </form>

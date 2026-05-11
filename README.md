@@ -1,19 +1,30 @@
 # Audio-book-player
 
-A fully client-side audiobook player built for GitHub Pages. Load local MP3 files, save your listening position per profile, and use a sleep timer without any server.
+A client-side audiobook player built for GitHub Pages. Load audio files, save your listening position per profile, reopen approved files in compatible browsers, and use a sleep timer without any server.
 
 ## Features
-- Local MP3 playback with progress tracking.
-- Lightweight profile system (optional PIN) stored in browser storage.
+- Local audio playback with progress tracking.
+- Lightweight profile system stored in browser storage.
 - Resume prompt for previously played files on the same device.
+- Stable file identity based on name, size, and modified time to avoid same-name collisions.
 - Adjustable playback speed, volume, and sleep timer.
+- Progressive Web App manifest and service worker for install support.
+- File System Access API quick reopen support where the browser allows it.
 
 ## Getting started
 1. Open `index.html` in your browser or serve the folder with any static server.
 2. Create or sign in to a profile.
-3. Choose an MP3 file from your device to begin listening.
+3. Choose an audio file from your device to begin listening.
 
-> **Note**: Because this is hosted on GitHub Pages, the app cannot access files unless you select them each session. The app remembers the last file name and position so you can quickly resume by choosing the same file again.
+> **Note**: Browsers that support the File System Access API can reopen previously approved files. Other browsers still require you to choose the file again each session.
+
+## Testing
+```bash
+npm install
+npm test
+```
+
+The Playwright suite covers startup, corrupt storage recovery, profile migration, file loading, resume behavior, same-name file collisions, user switching, sleep timer behavior, object URL cleanup, and PWA registration.
 
 ## Documentation
 - [Development guide](docs/DEVELOPMENT.md)

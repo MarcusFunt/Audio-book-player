@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="AudioBook Player icon">
+  <rect width="512" height="512" rx="112" fill="#3b5af7"/>
+  <path d="M146 136c0-22 18-40 40-40h176c22 0 40 18 40 40v240c0 22-18 40-40 40H186c-22 0-40-18-40-40V136Z" fill="#ffffff"/>
+  <path d="M190 152h128c18 0 32 14 32 32v176H206c-9 0-16-7-16-16V152Z" fill="#dfe5ff"/>
+  <path d="M206 184h112M206 224h112M206 264h80" stroke="#101728" stroke-width="22" stroke-linecap="round"/>
+  <path d="M342 300c32 0 58 26 58 58s-26 58-58 58-58-26-58-58 26-58 58-58Z" fill="#101728"/>
+  <path d="M328 334v48l42-24-42-24Z" fill="#ffffff"/>
+</svg>

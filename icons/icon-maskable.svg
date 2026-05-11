@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="AudioBook Player icon">
+  <rect width="512" height="512" fill="#3b5af7"/>
+  <circle cx="256" cy="256" r="204" fill="#ffffff"/>
+  <path d="M154 142c0-24 20-44 44-44h146c24 0 44 20 44 44v228c0 24-20 44-44 44H198c-24 0-44-20-44-44V142Z" fill="#dfe5ff"/>
+  <path d="M204 178h104M204 220h104M204 262h74" stroke="#101728" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="344" cy="352" r="58" fill="#101728"/>
+  <path d="M330 328v48l42-24-42-24Z" fill="#ffffff"/>
+</svg>

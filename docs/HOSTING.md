@@ -3,7 +3,8 @@
 This project is configured to deploy automatically to GitHub Pages using GitHub Actions.
 
 ## How it works
-- A workflow in `.github/workflows/deploy-pages.yml` runs on pushes to `main`.
+- A workflow in `.github/workflows/deploy-pages.yml` runs tests on pull requests and pushes to `main`.
+- On pushes to `main`, deployment waits for the test job to pass.
 - The workflow uploads the repository contents as a Pages artifact.
 - GitHub Pages serves the static site from the artifact.
 

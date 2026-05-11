@@ -1,7 +1,10 @@
 const audio = document.getElementById("audio");
 const fileInput = document.getElementById("file-input");
+const filePickerButton = document.getElementById("file-picker-button");
+const reopenFileButton = document.getElementById("reopen-file");
 const fileName = document.getElementById("file-name");
 const fileHint = document.getElementById("file-hint");
+const fileAccessStatus = document.getElementById("file-access-status");
 const trackTitle = document.getElementById("track-title");
 const trackMeta = document.getElementById("track-meta");
 const progress = document.getElementById("progress");
@@ -21,25 +24,129 @@ const resumeButton = document.getElementById("resume-button");
 const loginModal = document.getElementById("login-modal");
 const loginForm = document.getElementById("login-form");
 const usernameInput = document.getElementById("username");
-const pinInput = document.getElementById("pin");
 const loginMessage = document.getElementById("login-message");
 const activeUser = document.getElementById("active-user");
 const switchUser = document.getElementById("switch-user");
 
 let currentUser = null;
+let currentFileId = null;
 let currentFileName = null;
+let currentObjectUrl = null;
+let pendingResume = null;
 let saveThrottle = 0;
 let sleepCountdown = null;
 let sleepRemaining = 0;
 
 const STORAGE_KEY = "audiobookProfiles";
 const LAST_USER_KEY = "audiobookLastUser";
+const FILE_HANDLES_DB = "audiobookFileHandles";
+const FILE_HANDLES_STORE = "handles";
+const FILE_HANDLES_VERSION = 1;
+const AUDIO_FILE_TYPES = [
+  {
+    description: "Audio files",
+    accept: {
+      "audio/*": [".mp3", ".m4a", ".m4b", ".wav", ".ogg", ".aac"],
+    },
+  },
+];
 
-const loadProfiles = () =>
-  JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+const isRecord = (value) =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
-const saveProfiles = (profiles) =>
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(profiles));
+const clamp = (value, min, max) => {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  if (!Number.isFinite(max)) {
+    return Math.max(min, value);
+  }
+  return Math.min(Math.max(value, min), max);
+};
+
+const normalizeProgressEntry = (entry) => {
+  if (!isRecord(entry)) {
+    return null;
+  }
+  return {
+    position: Math.max(0, Number(entry.position) || 0),
+    duration: Math.max(0, Number(entry.duration) || 0),
+    updatedAt:
+      typeof entry.updatedAt === "string"
+        ? entry.updatedAt
+        : new Date().toISOString(),
+  };
+};
+
+const normalizeProfile = (profile) => {
+  const source = isRecord(profile) ? profile : {};
+  const progressMap = isRecord(source.progress) ? source.progress : {};
+  const progressEntries = Object.entries(progressMap)
+    .map(([key, entry]) => [key, normalizeProgressEntry(entry)])
+    .filter(([, entry]) => entry);
+
+  return {
+    progress: Object.fromEntries(progressEntries),
+    lastFileId:
+      typeof source.lastFileId === "string" ? source.lastFileId : null,
+    lastFileName:
+      typeof source.lastFileName === "string" ? source.lastFileName : null,
+    playbackRate:
+      typeof source.playbackRate === "string" ||
+      typeof source.playbackRate === "number"
+        ? String(source.playbackRate)
+        : "1",
+    volume:
+      typeof source.volume === "string" || typeof source.volume === "number"
+        ? String(source.volume)
+        : "1",
+  };
+};
+
+const normalizeProfiles = (profiles) => {
+  if (!isRecord(profiles)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(profiles)
+      .filter(([username]) => username.trim())
+      .map(([username, profile]) => [username, normalizeProfile(profile)])
+  );
+};
+
+const loadProfiles = () => {
+  const emptyProfiles = {};
+
+  try {
+    const rawProfiles = localStorage.getItem(STORAGE_KEY);
+    if (!rawProfiles) {
+      return emptyProfiles;
+    }
+
+    const parsedProfiles = JSON.parse(rawProfiles);
+    const normalizedProfiles = normalizeProfiles(parsedProfiles);
+    if (JSON.stringify(parsedProfiles) !== JSON.stringify(normalizedProfiles)) {
+      saveProfiles(normalizedProfiles);
+    }
+    return normalizedProfiles;
+  } catch {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(emptyProfiles));
+    } catch {
+      // Ignore storage write failures so the player can still run.
+    }
+    return emptyProfiles;
+  }
+};
+
+const saveProfiles = (profiles) => {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizeProfiles(profiles)));
+  } catch {
+    // Storage can fail in private browsing or quota-limited contexts.
+  }
+};
 
 const formatTime = (value) => {
   if (!Number.isFinite(value)) {
@@ -50,28 +157,154 @@ const formatTime = (value) => {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 };
 
+const formatFileSize = (bytes) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 KB";
+  }
+  if (bytes < 1024 * 1024) {
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const getFileId = (file) =>
+  `${file.name}:${file.size}:${file.lastModified || 0}`;
+
+const getSafeDuration = () =>
+  Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
+
 const updateProgressUI = () => {
-  progress.value = audio.duration
-    ? (audio.currentTime / audio.duration) * 100
-    : 0;
+  const duration = getSafeDuration();
+  progress.value = duration ? (audio.currentTime / duration) * 100 : 0;
   currentTimeLabel.textContent = formatTime(audio.currentTime);
-  durationLabel.textContent = formatTime(audio.duration);
+  durationLabel.textContent = formatTime(duration);
 };
 
 const updatePlayButton = () => {
-  playToggle.textContent = audio.paused ? "▶ Play" : "⏸ Pause";
+  playToggle.textContent = audio.paused ? "Play" : "Pause";
+};
+
+const openFileHandleDb = () =>
+  new Promise((resolve, reject) => {
+    if (!("indexedDB" in window)) {
+      reject(new Error("IndexedDB is unavailable."));
+      return;
+    }
+
+    const request = indexedDB.open(FILE_HANDLES_DB, FILE_HANDLES_VERSION);
+
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(FILE_HANDLES_STORE)) {
+        db.createObjectStore(FILE_HANDLES_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+
+const runHandleTransaction = async (mode, callback) => {
+  const db = await openFileHandleDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(FILE_HANDLES_STORE, mode);
+    const store = transaction.objectStore(FILE_HANDLES_STORE);
+    const request = callback(store);
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => db.close();
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error);
+    };
+  });
+};
+
+const saveFileHandle = async (fileId, handle) => {
+  if (!fileId || !handle) {
+    return;
+  }
+  await runHandleTransaction("readwrite", (store) => store.put(handle, fileId));
+};
+
+const getFileHandle = async (fileId) => {
+  if (!fileId) {
+    return null;
+  }
+  try {
+    return await runHandleTransaction("readonly", (store) => store.get(fileId));
+  } catch {
+    return null;
+  }
+};
+
+const canUseFileSystemAccess = () =>
+  "showOpenFilePicker" in window && "indexedDB" in window;
+
+const requestFileHandlePermission = async (handle) => {
+  if (!handle || typeof handle.queryPermission !== "function") {
+    return "denied";
+  }
+  const options = { mode: "read" };
+  let permission = await handle.queryPermission(options);
+  if (permission === "prompt" && typeof handle.requestPermission === "function") {
+    permission = await handle.requestPermission(options);
+  }
+  return permission;
+};
+
+const setFileAccessStatus = (message) => {
+  fileAccessStatus.textContent = message || "";
+};
+
+const refreshFileAccessUI = async () => {
+  const profile = getCurrentProfile();
+
+  if (!canUseFileSystemAccess()) {
+    filePickerButton.textContent = "Choose audio";
+    reopenFileButton.classList.add("hidden");
+    reopenFileButton.disabled = true;
+    setFileAccessStatus("Your browser will ask you to choose the file each session.");
+    return;
+  }
+
+  filePickerButton.textContent = "Choose audio";
+  if (!profile?.lastFileId || !profile?.lastFileName) {
+    reopenFileButton.classList.add("hidden");
+    reopenFileButton.disabled = true;
+    setFileAccessStatus("This browser can reopen approved files after you choose them.");
+    return;
+  }
+
+  const handle = await getFileHandle(profile.lastFileId);
+  if (!handle) {
+    reopenFileButton.classList.add("hidden");
+    reopenFileButton.disabled = true;
+    setFileAccessStatus("Choose a file once to enable quick reopen here.");
+    return;
+  }
+
+  reopenFileButton.textContent = `Reopen ${profile.lastFileName}`;
+  reopenFileButton.classList.remove("hidden");
+  reopenFileButton.disabled = false;
+  setFileAccessStatus("You can reopen the last approved file on this browser.");
 };
 
 const setUser = (username) => {
   currentUser = username;
   activeUser.textContent = `Signed in as ${username}`;
-  localStorage.setItem(LAST_USER_KEY, username);
+  try {
+    localStorage.setItem(LAST_USER_KEY, username);
+  } catch {
+    // Ignore storage write failures.
+  }
 };
 
 const showLogin = () => {
   loginModal.classList.remove("hidden");
   loginModal.style.display = "flex";
   loginMessage.textContent = "";
+  usernameInput.focus();
 };
 
 const hideLogin = () => {
@@ -91,25 +324,23 @@ const saveCurrentProfile = (updates) => {
   if (!currentUser) {
     return;
   }
+
   const profiles = loadProfiles();
-  const profile = profiles[currentUser] || {
-    pin: "",
-    progress: {},
-  };
-  profiles[currentUser] = { ...profile, ...updates };
+  const profile = profiles[currentUser] || normalizeProfile({});
+  profiles[currentUser] = normalizeProfile({ ...profile, ...updates });
   saveProfiles(profiles);
 };
 
-const ensureResumeBanner = () => {
+const ensureResumeHint = () => {
   const profile = getCurrentProfile();
   if (!profile) {
-    resumeBanner.classList.add("hidden");
+    hideResumePrompt();
+    fileHint.textContent = "";
     return;
   }
-  const lastFile = profile.lastFileName;
-  if (lastFile) {
-    resumeText.textContent = `Last time you listened to ${lastFile}. Choose that file to resume.`;
-    fileHint.textContent = `Last file: ${lastFile}`;
+
+  if (profile.lastFileName) {
+    fileHint.textContent = `Last file: ${profile.lastFileName}`;
   } else {
     fileHint.textContent = "";
   }
@@ -119,10 +350,13 @@ const showResumePrompt = (savedPosition, duration) => {
   resumeText.textContent = `Saved position at ${formatTime(
     savedPosition
   )} of ${formatTime(duration)}.`;
+  resumeButton.disabled = false;
   resumeBanner.classList.remove("hidden");
 };
 
 const hideResumePrompt = () => {
+  pendingResume = null;
+  resumeButton.disabled = true;
   resumeBanner.classList.add("hidden");
 };
 
@@ -130,6 +364,7 @@ const applyProfileSettings = (profile) => {
   if (!profile) {
     return;
   }
+
   if (profile.playbackRate) {
     playbackRate.value = profile.playbackRate;
     audio.playbackRate = Number(profile.playbackRate);
@@ -140,22 +375,32 @@ const applyProfileSettings = (profile) => {
   }
 };
 
+const findSavedProgress = (profile, fileId, legacyFileName) => {
+  if (!profile?.progress) {
+    return null;
+  }
+  return profile.progress[fileId] || profile.progress[legacyFileName] || null;
+};
+
 const updateProfileProgress = () => {
-  if (!currentUser || !currentFileName) {
+  if (!currentUser || !currentFileId) {
     return;
   }
+
   const profile = getCurrentProfile();
   if (!profile) {
     return;
   }
-  const progressMap = profile.progress || {};
-  progressMap[currentFileName] = {
-    position: audio.currentTime,
-    duration: audio.duration || 0,
+
+  const progressMap = { ...(profile.progress || {}) };
+  progressMap[currentFileId] = {
+    position: Math.max(0, audio.currentTime || 0),
+    duration: getSafeDuration(),
     updatedAt: new Date().toISOString(),
   };
   saveCurrentProfile({
     progress: progressMap,
+    lastFileId: currentFileId,
     lastFileName: currentFileName,
   });
 };
@@ -163,6 +408,7 @@ const updateProfileProgress = () => {
 const setSleepTimer = (seconds) => {
   if (sleepCountdown) {
     clearInterval(sleepCountdown);
+    sleepCountdown = null;
   }
   sleepRemaining = seconds;
   if (!seconds) {
@@ -170,6 +416,7 @@ const setSleepTimer = (seconds) => {
     cancelTimer.disabled = true;
     return;
   }
+
   cancelTimer.disabled = false;
   sleepStatus.textContent = `Sleeping in ${formatTime(sleepRemaining)}.`;
   sleepCountdown = setInterval(() => {
@@ -189,76 +436,226 @@ const setSleepTimer = (seconds) => {
   }, 1000);
 };
 
-loginForm.addEventListener("submit", (event) => {
+const revokeCurrentObjectUrl = () => {
+  if (currentObjectUrl) {
+    URL.revokeObjectURL(currentObjectUrl);
+    currentObjectUrl = null;
+  }
+};
+
+const resetPlayerState = ({ keepFileHint = false } = {}) => {
+  audio.pause();
+  revokeCurrentObjectUrl();
+  audio.removeAttribute("src");
+  audio.load();
+
+  currentFileId = null;
+  currentFileName = null;
+  saveThrottle = 0;
+  pendingResume = null;
+  fileInput.value = "";
+
+  fileName.textContent = "No file selected";
+  if (!keepFileHint) {
+    fileHint.textContent = "";
+  }
+  trackTitle.textContent = "No audio loaded";
+  trackMeta.textContent = currentUser
+    ? "Select a file to begin."
+    : "Sign in and select a file to begin.";
+  progress.value = 0;
+  currentTimeLabel.textContent = "0:00";
+  durationLabel.textContent = "0:00";
+  hideResumePrompt();
+  updatePlayButton();
+};
+
+const prepareResumePrompt = () => {
+  if (!pendingResume) {
+    hideResumePrompt();
+    return;
+  }
+
+  const duration = getSafeDuration() || pendingResume.duration || 0;
+  const position = clamp(pendingResume.position, 0, duration);
+  pendingResume = { ...pendingResume, position, duration };
+
+  if (position > 0) {
+    showResumePrompt(position, duration);
+  } else {
+    hideResumePrompt();
+  }
+};
+
+const loadAudioFile = async (file, handle = null) => {
+  if (!file) {
+    return;
+  }
+
+  updateProfileProgress();
+  revokeCurrentObjectUrl();
+  hideResumePrompt();
+
+  currentFileId = getFileId(file);
+  currentFileName = file.name;
+  saveThrottle = 0;
+
+  const profile = getCurrentProfile();
+  const saved = findSavedProgress(profile, currentFileId, currentFileName);
+  if (saved) {
+    pendingResume = {
+      fileId: currentFileId,
+      position: saved.position,
+      duration: saved.duration,
+    };
+  }
+
+  currentObjectUrl = URL.createObjectURL(file);
+  audio.src = currentObjectUrl;
+  audio.load();
+
+  fileName.textContent = file.name;
+  trackTitle.textContent = file.name;
+  trackMeta.textContent = `Loaded locally - ${formatFileSize(file.size)}`;
+  fileHint.textContent = "";
+
+  saveCurrentProfile({
+    lastFileId: currentFileId,
+    lastFileName: currentFileName,
+  });
+
+  if (handle) {
+    try {
+      await saveFileHandle(currentFileId, handle);
+    } catch {
+      setFileAccessStatus("File loaded, but quick reopen could not be saved.");
+    }
+  }
+
+  if (getSafeDuration()) {
+    prepareResumePrompt();
+  }
+
+  await refreshFileAccessUI();
+};
+
+const openWithFileSystemPicker = async () => {
+  if (!canUseFileSystemAccess()) {
+    fileInput.click();
+    return;
+  }
+
+  try {
+    const [handle] = await window.showOpenFilePicker({
+      multiple: false,
+      types: AUDIO_FILE_TYPES,
+    });
+    if (!handle) {
+      return;
+    }
+
+    const file = await handle.getFile();
+    await loadAudioFile(file, handle);
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      setFileAccessStatus("Unable to open that file. Try browsing instead.");
+    }
+  }
+};
+
+const reopenLastFile = async () => {
+  const profile = getCurrentProfile();
+  if (!profile?.lastFileId) {
+    return;
+  }
+
+  const handle = await getFileHandle(profile.lastFileId);
+  if (!handle) {
+    await refreshFileAccessUI();
+    return;
+  }
+
+  const permission = await requestFileHandlePermission(handle);
+  if (permission !== "granted") {
+    setFileAccessStatus("Permission is needed before reopening that file.");
+    return;
+  }
+
+  try {
+    const file = await handle.getFile();
+    await loadAudioFile(file, handle);
+  } catch {
+    setFileAccessStatus("That file could not be reopened. Choose it again.");
+  }
+};
+
+loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const username = usernameInput.value.trim();
-  const pin = pinInput.value.trim();
   if (!username) {
     loginMessage.textContent = "Please enter a username.";
     return;
   }
+
   const profiles = loadProfiles();
-  const existing = profiles[username];
-  if (existing) {
-    if (existing.pin && existing.pin !== pin) {
-      loginMessage.textContent = "Incorrect PIN for this profile.";
-      return;
-    }
-  } else {
-    profiles[username] = {
-      pin,
-      progress: {},
-    };
+  if (!profiles[username]) {
+    profiles[username] = normalizeProfile({});
     saveProfiles(profiles);
   }
+
   setUser(username);
   applyProfileSettings(getCurrentProfile());
-  ensureResumeBanner();
+  ensureResumeHint();
+  await refreshFileAccessUI();
   hideLogin();
 });
 
 switchUser.addEventListener("click", () => {
+  updateProfileProgress();
+  resetPlayerState();
+  setSleepTimer(0);
+  sleepTimer.value = "off";
   currentUser = null;
   activeUser.textContent = "Not signed in";
+  try {
+    localStorage.removeItem(LAST_USER_KEY);
+  } catch {
+    // Ignore storage write failures.
+  }
+  usernameInput.value = "";
+  setFileAccessStatus("");
   showLogin();
 });
 
-fileInput.addEventListener("change", (event) => {
-  const file = event.target.files[0];
-  if (!file) {
-    return;
-  }
-  const objectUrl = URL.createObjectURL(file);
-  audio.src = objectUrl;
-  currentFileName = file.name;
-  fileName.textContent = file.name;
-  trackTitle.textContent = file.name;
-  trackMeta.textContent = `Loaded locally · ${Math.round(file.size / 1024)} KB`;
-  hideResumePrompt();
+filePickerButton.addEventListener("click", openWithFileSystemPicker);
 
-  const profile = getCurrentProfile();
-  if (profile && profile.progress && profile.progress[currentFileName]) {
-    const saved = profile.progress[currentFileName];
-    showResumePrompt(saved.position, saved.duration);
-    resumeButton.onclick = () => {
-      audio.currentTime = saved.position;
-      updateProgressUI();
-      hideResumePrompt();
-    };
-  }
-  saveCurrentProfile({ lastFileName: currentFileName });
+reopenFileButton.addEventListener("click", reopenLastFile);
+
+fileInput.addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  await loadAudioFile(file);
 });
 
 resumeButton.addEventListener("click", () => {
-  resumeBanner.classList.add("hidden");
+  if (pendingResume) {
+    const duration = getSafeDuration() || pendingResume.duration || 0;
+    audio.currentTime = clamp(pendingResume.position, 0, duration);
+    updateProgressUI();
+  }
+  hideResumePrompt();
 });
 
-playToggle.addEventListener("click", () => {
+playToggle.addEventListener("click", async () => {
   if (!audio.src) {
     return;
   }
+
   if (audio.paused) {
-    audio.play();
+    try {
+      await audio.play();
+    } catch {
+      trackMeta.textContent = "Playback could not start for this file.";
+    }
   } else {
     audio.pause();
   }
@@ -266,10 +663,12 @@ playToggle.addEventListener("click", () => {
 
 back15.addEventListener("click", () => {
   audio.currentTime = Math.max(0, audio.currentTime - 15);
+  updateProgressUI();
 });
 
 forward30.addEventListener("click", () => {
-  audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 30);
+  audio.currentTime = Math.min(getSafeDuration(), audio.currentTime + 30);
+  updateProgressUI();
 });
 
 playbackRate.addEventListener("change", () => {
@@ -293,14 +692,17 @@ cancelTimer.addEventListener("click", () => {
 });
 
 progress.addEventListener("input", () => {
-  if (!audio.duration) {
+  const duration = getSafeDuration();
+  if (!duration) {
     return;
   }
-  audio.currentTime = (progress.value / 100) * audio.duration;
+  audio.currentTime = (Number(progress.value) / 100) * duration;
+  updateProgressUI();
 });
 
 audio.addEventListener("loadedmetadata", () => {
   updateProgressUI();
+  prepareResumePrompt();
 });
 
 audio.addEventListener("timeupdate", () => {
@@ -323,19 +725,50 @@ audio.addEventListener("ended", () => {
   updateProfileProgress();
 });
 
-const init = () => {
-  const lastUser = localStorage.getItem(LAST_USER_KEY);
+window.addEventListener("beforeunload", () => {
+  updateProfileProgress();
+  revokeCurrentObjectUrl();
+});
+
+const registerServiceWorker = async () => {
+  if (!("serviceWorker" in navigator)) {
+    return;
+  }
+
+  try {
+    await navigator.serviceWorker.register("./sw.js");
+  } catch {
+    // The app still works without service worker support.
+  }
+};
+
+const init = async () => {
+  resetPlayerState();
+  loadProfiles();
+
+  let lastUser = null;
+  try {
+    lastUser = localStorage.getItem(LAST_USER_KEY);
+  } catch {
+    lastUser = null;
+  }
+
   if (lastUser) {
     const profiles = loadProfiles();
     if (profiles[lastUser]) {
       setUser(lastUser);
       applyProfileSettings(profiles[lastUser]);
-      ensureResumeBanner();
+      ensureResumeHint();
+      await refreshFileAccessUI();
       hideLogin();
+      registerServiceWorker();
       return;
     }
   }
+
+  await refreshFileAccessUI();
   showLogin();
+  registerServiceWorker();
 };
 
 init();

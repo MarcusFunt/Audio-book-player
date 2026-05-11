@@ -1,0 +1,15 @@
+{
+  "name": "audio-book-player",
+  "version": "2.0.0",
+  "private": true,
+  "description": "A static audiobook player with saved progress, resume, sleep timer, PWA support, and browser tests.",
+  "scripts": {
+    "check": "node --check app.js && node --check sw.js && node --check playwright.config.js",
+    "test": "npm run check && playwright test",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "http-server": "^14.1.1"
+  }
+}
