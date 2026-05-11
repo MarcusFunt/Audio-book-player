@@ -35,7 +35,7 @@ const writeAudioFixture = (testInfo, folder, name, options = {}) => {
   fs.writeFileSync(filePath, buffer);
   const mtime = new Date("2024-01-01T00:00:00.000Z");
   fs.utimesSync(filePath, mtime, mtime);
-  return { path: filePath, name, size: buffer.length };
+  return { path: filePath, name, size: buffer.length, lastModified: mtime.getTime() };
 };
 
 const profileSnapshot = async (page) =>
@@ -77,6 +77,193 @@ const saveCurrentPosition = async (page, position) => {
 const getLastFileId = async (page, username) => {
   const profiles = await profileSnapshot(page);
   return profiles[username].lastFileId;
+};
+
+const installFileSystemAccessMock = async (page, fixtures, options = {}) => {
+  const files = fixtures.map((fixture, index) => ({
+    id: fixture.id || fixture.name || `file-${index}`,
+    name: fixture.name,
+    type: "audio/wav",
+    lastModified: fixture.lastModified,
+    base64: fs.readFileSync(fixture.path).toString("base64"),
+  }));
+
+  await page.addInitScript(
+    ({ files: fileDefinitions, options: mockOptions }) => {
+      const fileMap = new Map(fileDefinitions.map((file) => [file.id, file]));
+      const defaultFileId = mockOptions.defaultFileId || fileDefinitions[0]?.id;
+      const storePrefix = "__mockIndexedDb";
+      const failedReadKey = "__mockFileHandleFailedRead";
+      const permissionKey = "__mockFileHandlePermission";
+      const nextFileKey = "__mockFilePickerNextFile";
+
+      const readJson = (key) => {
+        try {
+          return JSON.parse(localStorage.getItem(key) || "{}");
+        } catch {
+          return {};
+        }
+      };
+
+      const writeJson = (key, value) => {
+        localStorage.setItem(key, JSON.stringify(value));
+      };
+
+      const toBytes = (base64) => {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) {
+          bytes[index] = binary.charCodeAt(index);
+        }
+        return bytes;
+      };
+
+      const makeFile = (fileId) => {
+        const definition = fileMap.get(fileId);
+        if (!definition) {
+          throw new DOMException("Mock file is unavailable.", "NotFoundError");
+        }
+        return new File([toBytes(definition.base64)], definition.name, {
+          type: definition.type,
+          lastModified: definition.lastModified,
+        });
+      };
+
+      const currentPermission = () =>
+        localStorage.getItem(permissionKey) || mockOptions.permission || "granted";
+
+      const makeHandle = (fileId) => {
+        const definition = fileMap.get(fileId);
+        return {
+          kind: "file",
+          name: definition?.name || fileId,
+          __mockFileHandleId: fileId,
+          async queryPermission() {
+            return currentPermission();
+          },
+          async requestPermission() {
+            return currentPermission();
+          },
+          async getFile() {
+            const failureName = localStorage.getItem(failedReadKey);
+            if (failureName) {
+              throw new DOMException("Mock file read failed.", failureName);
+            }
+            return makeFile(fileId);
+          },
+        };
+      };
+
+      const serializeValue = (value) =>
+        value?.__mockFileHandleId
+          ? { __mockType: "file-handle", id: value.__mockFileHandleId }
+          : value;
+
+      const deserializeValue = (value) =>
+        value?.__mockType === "file-handle" ? makeHandle(value.id) : value;
+
+      const createdStoreKey = (dbName, storeName) =>
+        `${storePrefix}:created:${dbName}:${storeName}`;
+
+      const dataStoreKey = (dbName, storeName) =>
+        `${storePrefix}:data:${dbName}:${storeName}`;
+
+      const makeRequest = (transaction, executor) => {
+        const request = {};
+        setTimeout(() => {
+          try {
+            request.result = executor();
+            request.onsuccess?.({ target: request });
+            transaction?.oncomplete?.({ target: transaction });
+          } catch (error) {
+            request.error = error;
+            request.onerror?.({ target: request });
+            if (transaction) {
+              transaction.error = error;
+              transaction.onerror?.({ target: transaction });
+            }
+          }
+        }, 0);
+        return request;
+      };
+
+      const createDatabase = (dbName) => ({
+        objectStoreNames: {
+          contains(storeName) {
+            return localStorage.getItem(createdStoreKey(dbName, storeName)) === "1";
+          },
+        },
+        createObjectStore(storeName) {
+          localStorage.setItem(createdStoreKey(dbName, storeName), "1");
+          return {};
+        },
+        transaction(storeName) {
+          const transaction = {
+            error: null,
+            oncomplete: null,
+            onerror: null,
+            objectStore() {
+              return {
+                put(value, key) {
+                  return makeRequest(transaction, () => {
+                    const storeKey = dataStoreKey(dbName, storeName);
+                    const data = readJson(storeKey);
+                    data[key] = serializeValue(value);
+                    writeJson(storeKey, data);
+                    return key;
+                  });
+                },
+                get(key) {
+                  return makeRequest(transaction, () => {
+                    const data = readJson(dataStoreKey(dbName, storeName));
+                    return deserializeValue(data[key]);
+                  });
+                },
+                delete(key) {
+                  return makeRequest(transaction, () => {
+                    const storeKey = dataStoreKey(dbName, storeName);
+                    const data = readJson(storeKey);
+                    delete data[key];
+                    writeJson(storeKey, data);
+                    return undefined;
+                  });
+                },
+              };
+            },
+          };
+          return transaction;
+        },
+        close() {},
+      });
+
+      Object.defineProperty(window, "indexedDB", {
+        configurable: true,
+        value: {
+          open(dbName) {
+            const request = {};
+            setTimeout(() => {
+              const database = createDatabase(dbName);
+              request.result = database;
+              if (!database.objectStoreNames.contains("handles")) {
+                request.onupgradeneeded?.({ target: request });
+              }
+              request.onsuccess?.({ target: request });
+            }, 0);
+            return request;
+          },
+        },
+      });
+
+      Object.defineProperty(window, "showOpenFilePicker", {
+        configurable: true,
+        value: async () => {
+          const fileId = localStorage.getItem(nextFileKey) || defaultFileId;
+          return [makeHandle(fileId)];
+        },
+      });
+    },
+    { files, options }
+  );
 };
 
 test("boots with empty storage and no PIN field", async ({ page }) => {
@@ -163,6 +350,59 @@ test("resumes progress by file identity after the file is selected again", async
 
   await expect(page.locator("#resume-banner")).toBeVisible();
   await expect(page.locator("#resume-text")).toContainText("0:01");
+});
+
+test("reopens the last approved file after a page reload", async ({
+  page,
+}, testInfo) => {
+  const fixture = writeAudioFixture(testInfo, "reopen", "chapter.wav", {
+    seconds: 4,
+  });
+
+  await installFileSystemAccessMock(page, [fixture]);
+  await openApp(page);
+  await signIn(page, "Alex");
+  await page.locator("#file-picker-button").click();
+  await expect(page.locator("#track-title")).toHaveText(fixture.name);
+  await expect(page.locator("#duration")).not.toHaveText("0:00", {
+    timeout: 7000,
+  });
+  await saveCurrentPosition(page, 1.5);
+
+  await page.reload();
+  await expect(page.locator("#active-user")).toHaveText("Signed in as Alex");
+  await expect(page.locator("#reopen-file")).toHaveText(`Reopen ${fixture.name}`);
+  await page.locator("#reopen-file").click();
+
+  await expect(page.locator("#track-title")).toHaveText(fixture.name);
+  await expect(page.locator("#resume-banner")).toBeVisible();
+  await expect(page.locator("#resume-text")).toContainText("0:01");
+});
+
+test("cleans up stale quick reopen handles when the file is unavailable", async ({
+  page,
+}, testInfo) => {
+  const fixture = writeAudioFixture(testInfo, "stale-reopen", "chapter.wav", {
+    seconds: 2,
+  });
+
+  await installFileSystemAccessMock(page, [fixture]);
+  await openApp(page);
+  await signIn(page, "Alex");
+  await page.locator("#file-picker-button").click();
+  await expect(page.locator("#track-title")).toHaveText(fixture.name);
+
+  await page.reload();
+  await expect(page.locator("#reopen-file")).toHaveText(`Reopen ${fixture.name}`);
+  await page.evaluate(() => {
+    localStorage.setItem("__mockFileHandleFailedRead", "NotFoundError");
+  });
+  await page.locator("#reopen-file").click();
+
+  await expect(page.locator("#file-access-status")).toHaveText(
+    "That file moved or was deleted. Choose it again."
+  );
+  await expect(page.locator("#reopen-file")).toHaveClass(/hidden/);
 });
 
 test("keeps progress separate for different files with the same name", async ({

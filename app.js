@@ -27,6 +27,10 @@ const usernameInput = document.getElementById("username");
 const loginMessage = document.getElementById("login-message");
 const activeUser = document.getElementById("active-user");
 const switchUser = document.getElementById("switch-user");
+const themeToggle = document.getElementById("theme-toggle");
+const themeIcon = document.getElementById("theme-icon");
+const themeLabel = document.getElementById("theme-label");
+const themeColorMeta = document.querySelector('meta[name="theme-color"]');
 
 let currentUser = null;
 let currentFileId = null;
@@ -36,9 +40,12 @@ let pendingResume = null;
 let saveThrottle = 0;
 let sleepCountdown = null;
 let sleepRemaining = 0;
+let fileAccessRefreshToken = 0;
+let isReopeningLastFile = false;
 
 const STORAGE_KEY = "audiobookProfiles";
 const LAST_USER_KEY = "audiobookLastUser";
+const THEME_KEY = "audiobookTheme";
 const FILE_HANDLES_DB = "audiobookFileHandles";
 const FILE_HANDLES_STORE = "handles";
 const FILE_HANDLES_VERSION = 1;
@@ -181,7 +188,46 @@ const updateProgressUI = () => {
 };
 
 const updatePlayButton = () => {
-  playToggle.textContent = audio.paused ? "Play" : "Pause";
+  playToggle.innerHTML = audio.paused
+    ? '<span aria-hidden="true">&#9654;</span><span>Play</span>'
+    : '<span aria-hidden="true">&#10073;&#10073;</span><span>Pause</span>';
+};
+
+const getSystemTheme = () => {
+  const systemThemeQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
+  return systemThemeQuery?.matches ? "dark" : "light";
+};
+
+const getStoredTheme = () => {
+  try {
+    const storedTheme = localStorage.getItem(THEME_KEY);
+    return storedTheme === "dark" || storedTheme === "light" ? storedTheme : null;
+  } catch {
+    return null;
+  }
+};
+
+const applyTheme = (theme) => {
+  const nextTheme = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = nextTheme;
+  themeToggle.setAttribute("aria-pressed", String(nextTheme === "dark"));
+  themeIcon.innerHTML = nextTheme === "dark" ? "&#9728;" : "&#9790;";
+  themeLabel.textContent = nextTheme === "dark" ? "Light mode" : "Dark mode";
+  if (themeColorMeta) {
+    themeColorMeta.setAttribute(
+      "content",
+      nextTheme === "dark" ? "#111214" : "#f5f7fb"
+    );
+  }
+};
+
+const setPreferredTheme = (theme) => {
+  applyTheme(theme);
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch {
+    // Theme changes are cosmetic, so ignore storage failures.
+  }
 };
 
 const openFileHandleDb = () =>
@@ -238,56 +284,114 @@ const getFileHandle = async (fileId) => {
   }
 };
 
+const deleteFileHandle = async (fileId) => {
+  if (!fileId) {
+    return;
+  }
+  try {
+    await runHandleTransaction("readwrite", (store) => store.delete(fileId));
+  } catch {
+    // Stale handle cleanup is best-effort.
+  }
+};
+
 const canUseFileSystemAccess = () =>
   "showOpenFilePicker" in window && "indexedDB" in window;
 
+const isUsableFileHandle = (handle) =>
+  Boolean(handle) && typeof handle.getFile === "function";
+
 const requestFileHandlePermission = async (handle) => {
-  if (!handle || typeof handle.queryPermission !== "function") {
+  if (!isUsableFileHandle(handle)) {
     return "denied";
   }
-  const options = { mode: "read" };
-  let permission = await handle.queryPermission(options);
-  if (permission === "prompt" && typeof handle.requestPermission === "function") {
-    permission = await handle.requestPermission(options);
+
+  if (typeof handle.queryPermission !== "function") {
+    return "granted";
   }
-  return permission;
+
+  try {
+    const options = { mode: "read" };
+    let permission = await handle.queryPermission(options);
+    if (
+      permission === "prompt" &&
+      typeof handle.requestPermission === "function"
+    ) {
+      permission = await handle.requestPermission(options);
+    }
+    return permission;
+  } catch {
+    return "denied";
+  }
 };
 
 const setFileAccessStatus = (message) => {
   fileAccessStatus.textContent = message || "";
 };
 
+const applyFileAccessRefresh = (refreshToken, refreshUser, callback) => {
+  if (refreshToken !== fileAccessRefreshToken || refreshUser !== currentUser) {
+    return false;
+  }
+  callback();
+  return true;
+};
+
+const hideReopenFileButton = (message) => {
+  reopenFileButton.textContent = "Reopen last file";
+  reopenFileButton.classList.add("hidden");
+  reopenFileButton.disabled = true;
+  setFileAccessStatus(message);
+};
+
 const refreshFileAccessUI = async () => {
+  const refreshToken = (fileAccessRefreshToken += 1);
+  const refreshUser = currentUser;
   const profile = getCurrentProfile();
 
   if (!canUseFileSystemAccess()) {
-    filePickerButton.textContent = "Choose audio";
-    reopenFileButton.classList.add("hidden");
-    reopenFileButton.disabled = true;
-    setFileAccessStatus("Your browser will ask you to choose the file each session.");
+    applyFileAccessRefresh(refreshToken, refreshUser, () => {
+      filePickerButton.textContent = "Choose audio";
+      hideReopenFileButton(
+        "Your browser will ask you to choose the file each session."
+      );
+    });
     return;
   }
 
   filePickerButton.textContent = "Choose audio";
   if (!profile?.lastFileId || !profile?.lastFileName) {
-    reopenFileButton.classList.add("hidden");
-    reopenFileButton.disabled = true;
-    setFileAccessStatus("This browser can reopen approved files after you choose them.");
+    applyFileAccessRefresh(refreshToken, refreshUser, () => {
+      hideReopenFileButton(
+        "This browser can reopen approved files after you choose them."
+      );
+    });
     return;
   }
 
   const handle = await getFileHandle(profile.lastFileId);
-  if (!handle) {
-    reopenFileButton.classList.add("hidden");
-    reopenFileButton.disabled = true;
-    setFileAccessStatus("Choose a file once to enable quick reopen here.");
+  if (!isUsableFileHandle(handle)) {
+    if (handle) {
+      await deleteFileHandle(profile.lastFileId);
+    }
+    applyFileAccessRefresh(refreshToken, refreshUser, () => {
+      hideReopenFileButton("Choose a file once to enable quick reopen here.");
+    });
     return;
   }
 
-  reopenFileButton.textContent = `Reopen ${profile.lastFileName}`;
-  reopenFileButton.classList.remove("hidden");
-  reopenFileButton.disabled = false;
-  setFileAccessStatus("You can reopen the last approved file on this browser.");
+  applyFileAccessRefresh(refreshToken, refreshUser, () => {
+    reopenFileButton.textContent = isReopeningLastFile
+      ? `Opening ${profile.lastFileName}...`
+      : `Reopen ${profile.lastFileName}`;
+    reopenFileButton.classList.remove("hidden");
+    reopenFileButton.disabled = isReopeningLastFile;
+    setFileAccessStatus(
+      isReopeningLastFile
+        ? `Opening ${profile.lastFileName}...`
+        : "You can reopen the last approved file on this browser."
+    );
+  });
 };
 
 const setUser = (username) => {
@@ -303,6 +407,7 @@ const setUser = (username) => {
 const showLogin = () => {
   loginModal.classList.remove("hidden");
   loginModal.style.display = "flex";
+  document.body.classList.add("modal-open");
   loginMessage.textContent = "";
   usernameInput.focus();
 };
@@ -310,6 +415,7 @@ const showLogin = () => {
 const hideLogin = () => {
   loginModal.classList.add("hidden");
   loginModal.style.display = "none";
+  document.body.classList.remove("modal-open");
 };
 
 const getCurrentProfile = () => {
@@ -554,6 +660,10 @@ const openWithFileSystemPicker = async () => {
       return;
     }
 
+    if (!isUsableFileHandle(handle)) {
+      throw new Error("The selected file handle is unavailable.");
+    }
+
     const file = await handle.getFile();
     await loadAudioFile(file, handle);
   } catch (error) {
@@ -564,28 +674,59 @@ const openWithFileSystemPicker = async () => {
 };
 
 const reopenLastFile = async () => {
-  const profile = getCurrentProfile();
-  if (!profile?.lastFileId) {
+  if (isReopeningLastFile) {
     return;
   }
 
-  const handle = await getFileHandle(profile.lastFileId);
-  if (!handle) {
+  const profile = getCurrentProfile();
+  if (!profile?.lastFileId) {
     await refreshFileAccessUI();
     return;
   }
 
-  const permission = await requestFileHandlePermission(handle);
-  if (permission !== "granted") {
-    setFileAccessStatus("Permission is needed before reopening that file.");
-    return;
-  }
+  const reopenUser = currentUser;
+  let finalStatus = "";
+
+  isReopeningLastFile = true;
+  reopenFileButton.disabled = true;
+  reopenFileButton.textContent = profile.lastFileName
+    ? `Opening ${profile.lastFileName}...`
+    : "Opening last file...";
+  setFileAccessStatus(reopenFileButton.textContent);
 
   try {
+    const handle = await getFileHandle(profile.lastFileId);
+    if (!isUsableFileHandle(handle)) {
+      if (handle) {
+        await deleteFileHandle(profile.lastFileId);
+      }
+      finalStatus = "Choose the file again to restore quick reopen.";
+      return;
+    }
+
+    const permission = await requestFileHandlePermission(handle);
+    if (permission !== "granted") {
+      finalStatus = "Permission is needed before reopening that file.";
+      return;
+    }
+
     const file = await handle.getFile();
     await loadAudioFile(file, handle);
-  } catch {
-    setFileAccessStatus("That file could not be reopened. Choose it again.");
+    finalStatus = `Reopened ${file.name}.`;
+  } catch (error) {
+    await deleteFileHandle(profile.lastFileId);
+    finalStatus =
+      error?.name === "NotFoundError"
+        ? "That file moved or was deleted. Choose it again."
+        : "That file could not be reopened. Choose it again.";
+  } finally {
+    isReopeningLastFile = false;
+    if (currentUser === reopenUser) {
+      await refreshFileAccessUI();
+      if (finalStatus) {
+        setFileAccessStatus(finalStatus);
+      }
+    }
   }
 };
 
@@ -625,6 +766,18 @@ switchUser.addEventListener("click", () => {
   usernameInput.value = "";
   setFileAccessStatus("");
   showLogin();
+});
+
+themeToggle.addEventListener("click", () => {
+  const currentTheme = document.documentElement.dataset.theme;
+  setPreferredTheme(currentTheme === "dark" ? "light" : "dark");
+});
+
+const themePreferenceQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
+themePreferenceQuery?.addEventListener?.("change", (event) => {
+  if (!getStoredTheme()) {
+    applyTheme(event.matches ? "dark" : "light");
+  }
 });
 
 filePickerButton.addEventListener("click", openWithFileSystemPicker);
@@ -743,6 +896,7 @@ const registerServiceWorker = async () => {
 };
 
 const init = async () => {
+  applyTheme(getStoredTheme() || getSystemTheme());
   resetPlayerState();
   loadProfiles();
 

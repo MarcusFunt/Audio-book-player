@@ -1,9 +1,9 @@
-const CACHE_NAME = "audiobook-player-v2";
+const CACHE_NAME = "audiobook-player-v7";
 const STATIC_ASSETS = [
   "./",
   "./index.html",
-  "./styles.css",
-  "./app.js",
+  "./styles.css?v=7",
+  "./app.js?v=7",
   "./manifest.webmanifest",
   "./icons/icon.svg",
   "./icons/icon-maskable.svg",

@@ -8,7 +8,7 @@
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="icons/icon.svg" />
     <link rel="apple-touch-icon" href="icons/icon.svg" />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=7" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -29,9 +29,26 @@
         </div>
         <div class="profile">
           <span id="active-user" class="profile__name">Not signed in</span>
-          <button id="switch-user" class="ghost-button" type="button">
-            Switch user
-          </button>
+          <div class="profile__actions">
+            <button
+              id="theme-toggle"
+              class="theme-toggle"
+              type="button"
+              aria-pressed="false"
+            >
+              <span
+                id="theme-icon"
+                class="theme-toggle__icon"
+                aria-hidden="true"
+              >
+                &#9790;
+              </span>
+              <span id="theme-label">Dark mode</span>
+            </button>
+            <button id="switch-user" class="ghost-button" type="button">
+              Switch user
+            </button>
+          </div>
         </div>
       </header>
 
@@ -80,7 +97,7 @@
 
       <section class="card player">
         <div class="player__art">
-          <div class="player__glyph">📖</div>
+          <div class="player__glyph" aria-hidden="true">&#128214;</div>
           <div>
             <h2 id="track-title">No audio loaded</h2>
             <p id="track-meta" class="muted">
@@ -104,13 +121,16 @@
         </div>
         <div class="player__controls">
           <button id="back-15" class="icon-button" type="button">
-            ⏪ 15s
+            <span aria-hidden="true">&#8630;</span>
+            <span>15s</span>
           </button>
           <button id="play-toggle" class="primary-button" type="button">
-            ▶ Play
+            <span aria-hidden="true">&#9654;</span>
+            <span>Play</span>
           </button>
           <button id="forward-30" class="icon-button" type="button">
-            30s ⏩
+            <span>30s</span>
+            <span aria-hidden="true">&#8631;</span>
           </button>
         </div>
         <div class="player__settings">
@@ -172,6 +192,6 @@
     </div>
 
     <audio id="audio"></audio>
-    <script src="app.js"></script>
+    <script src="app.js?v=7"></script>
   </body>
 </html>
